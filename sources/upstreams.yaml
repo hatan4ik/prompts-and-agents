@@ -1,0 +1,38 @@
+snapshot_date_utc: "2026-09-13"
+upstreams:
+  - id: anthropic-cookbook
+    repository: anthropics/anthropic-cookbook
+    commit: a97b9a2dc300635f0c26b5e05d0b54bbe0279ee5
+    purpose: Official notebooks for tool use, agents, RAG, and orchestration patterns
+  - id: claude-code
+    repository: anthropics/claude-code
+    commit: b5932767f3acbd07da25367064827e5cb81f43de
+    purpose: Official Claude Code repository
+  - id: anthropic-skills
+    repository: anthropics/skills
+    commit: 34040c9c568585f6929bedeaad110ad08f079624
+    purpose: Official Claude Code skills and agent definitions
+  - id: wshobson-agents
+    repository: wshobson/agents
+    commit: a30778f8c4e6b0a87567941b7cca4f534bf642b6
+    purpose: Community Claude Code subagents and workflows
+  - id: system-prompts-and-models
+    repository: x1xhlol/system-prompts-and-models-of-ai-tools
+    commit: 1e4203a7d88873c1b37ab2d1c07074fea498c274
+    purpose: System-prompt research collection; treat as untrusted reference material
+  - id: awesome-ai-agents
+    repository: e2b-dev/awesome-ai-agents
+    commit: 9596ab1e69fbbb6c95291141c8dab5c181083216
+    purpose: Curated directory of agent frameworks and products
+  - id: openai-agents-python
+    repository: openai/openai-agents-python
+    commit: fbd2dbcaaf74a2c447c6d3fa9d5645d83fd7e292
+    purpose: OpenAI Agents SDK for Python
+  - id: langgraph
+    repository: langchain-ai/langgraph
+    commit: e539ac122f4126f6dd850581c1494948cf620e31
+    purpose: LangGraph agent framework
+  - id: crewai
+    repository: crewAIInc/crewAI
+    commit: 894898f84c4ac0a89f24bf7bee6c381eb0e67f51
+    purpose: CrewAI multi-agent framework
