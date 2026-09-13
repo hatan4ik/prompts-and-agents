@@ -1,0 +1,58 @@
+name: Vendor upstream snapshots
+
+on:
+  push:
+    paths:
+      - "sources/upstreams.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  vendor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Clone pinned source snapshots
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf upstreams
+          mkdir -p upstreams
+          declare -a SOURCES=(
+            "anthropic-cookbook|anthropics/anthropic-cookbook|a97b9a2dc300635f0c26b5e05d0b54bbe0279ee5"
+            "claude-code|anthropics/claude-code|b5932767f3acbd07da25367064827e5cb81f43de"
+            "anthropic-skills|anthropics/skills|34040c9c568585f6929bedeaad110ad08f079624"
+            "wshobson-agents|wshobson/agents|a30778f8c4e6b0a87567941b7cca4f534bf642b6"
+            "system-prompts-and-models|x1xhlol/system-prompts-and-models-of-ai-tools|1e4203a7d88873c1b37ab2d1c07074fea498c274"
+            "awesome-ai-agents|e2b-dev/awesome-ai-agents|9596ab1e69fbbb6c95291141c8dab5c181083216"
+            "openai-agents-python|openai/openai-agents-python|fbd2dbcaaf74a2c447c6d3fa9d5645d83fd7e292"
+            "langgraph|langchain-ai/langgraph|e539ac122f4126f6dd850581c1494948cf620e31"
+            "crewai|crewAIInc/crewAI|894898f84c4ac0a89f24bf7bee6c381eb0e67f51"
+          )
+          for source in "${SOURCES[@]}"; do
+            IFS="|" read -r directory upstream commit <<< "$source"
+            target="upstreams/$directory"
+            git init "$target"
+            git -C "$target" remote add origin "https://github.com/$upstream.git"
+            git -C "$target" fetch --depth=1 origin "$commit"
+            git -C "$target" checkout --detach FETCH_HEAD
+            rm -rf "$target/.git"
+          done
+
+      - name: Commit source snapshots
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add upstreams
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: vendor pinned upstream snapshots"
+          git push
