@@ -1,5 +1,4 @@
-import { countOf } from '../../../count-of'
-import type Git from '../../../git'
+import Git from '../../../git'
 import { leadingHunkOf } from '../leading-hunk-of'
 import { firstLineCut } from './first-line-cut'
 
@@ -19,6 +18,7 @@ export function subHunksOf(
   maxChars: number,
 ): Pick<Git.FileHunks, 'hunks' | 'isTruncated'> {
   const hunks: Git.Hunk[] = []
+
   let rest = hunk
   let isTruncated = false
 
@@ -30,16 +30,9 @@ export function subHunksOf(
       ? { ...rest, lines: [firstLineCut(rest, maxChars)] }
       : leading
 
-    const taken = rest.lines.slice(0, piece.lines.length)
-
     hunks.push(piece)
     isTruncated ||= isLineCut
-
-    rest = {
-      oldStart: rest.oldStart + countOf(taken, line => !line.startsWith('+')),
-      newStart: rest.newStart + countOf(taken, line => !line.startsWith('-')),
-      lines: rest.lines.slice(piece.lines.length),
-    }
+    rest = Git.hunkAfter(rest, piece.lines.length)
   }
 
   return { hunks, isTruncated }

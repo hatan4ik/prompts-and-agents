@@ -1,12 +1,22 @@
-import type { On, ResultOf, SessionMessage, Timer } from 'claude-code'
+import type {
+  Args,
+  On,
+  PaneOpenArgs,
+  ResultOf,
+  SessionMessage,
+  Timer,
+} from 'claude-code'
 
 import Ask from './ask'
 import Backend from './backend'
 import { COMMAND_SPEC } from './command-spec'
+import { drawnFilesOf } from './drawn-files-of'
 import { entryKindsOf } from './entry-kinds-of'
 import type Git from './git'
 import type { Host } from './host'
+import { isCheckpointing } from './is-checkpointing'
 import { isOnPaneSurface } from './is-on-pane-surface'
+import { isRecord } from './is-record'
 import Limits from './limits'
 import { messageOf } from './message-of'
 import { mtimeOf } from './mtime-of'
@@ -15,15 +25,16 @@ import PaneState from './pane-state'
 import PaneToggle from './pane-toggle'
 import Record from './record'
 import Tools from './tools'
+import Turns from './turns'
 import Views from './views'
 
 /**
  * Registers the diff pane: `/diff` once the built-in stands down, the
  * pane's drawing and refresh, its opening on Claude's first edit, the ask.
  *
- * `session.start` registers `/diff`, binds the host every pinned backend
- * reads through (currentOf: the latest start's, the engine only before
- * bind()), and pins the backend (backendOf), asked again on `/diff`.
+ * Git runs when the built-in's would: none at the start; `/diff` or the main
+ * loop's first checkpointed edit with room pins the backend, until `/clear`,
+ * which reads afresh under a pane it leaves open.
  *
  * @param on the engine's registrar
  */
@@ -33,25 +44,38 @@ export function register(on: On) {
   let probing: Promise<boolean> | null = null
   let sessionStartMs = 0
   let isPaneOpen = false
+  let dialogRows: number | null = null
   let hasAutoOpened = false
+  let hasRestoredEdits = false
   let columns: number | null = null
   let shownSessionId: string | null = null
-  let wasDrawnSinceProbe = false
   let armed: Ask.ArmedAsk | null = null
   let carrying: Ask.ArmedAsk | null = null
   let isRefreshing = false
   let isRefreshQueued = false
   let generation = 0
-  let bodyKey: string | null = null
+  let landed = 0
+  let bodyStamp: string | null = null
+  let bodyBase: string | null = null
+
+  const bodyLoads = new Set<string>()
+
   const polled = { toplevel: '', headKey: '' }
+  const pin = { cwd: '', isEmpty: false, epoch: 0 }
+
   let model: PaneState.PaneModel = PaneState.INITIAL_MODEL
+
   const timers = new Map<'refresh' | 'redraw' | 'poll', Timer>()
   const loggedBaseKinds = new Set<'ok' | 'sad'>()
 
   const currentOf = (engine: Host): Host => host ?? engine
 
   const backendHostOf = (engine: Host): Backend.BackendHost => ({
-    run: (argv, init) => currentOf(engine).run(argv, init),
+    run: (argv, init) =>
+      currentOf(engine).run(
+        argv,
+        pin.cwd === '' ? init : { cwd: pin.cwd, ...init },
+      ),
     readFile: path => currentOf(engine).readFile(path),
     mtimeOf: path => mtimeOf(currentOf(engine))(path),
     entryKindsOf: dir => entryKindsOf(currentOf(engine))(dir),
@@ -81,7 +105,7 @@ export function register(on: On) {
   })
 
   function pinBackend(engine: Host): Promise<boolean> {
-    if (backend) {
+    if (backend || pin.isEmpty) {
       return Promise.resolve(true)
     }
 
@@ -95,6 +119,7 @@ export function register(on: On) {
   async function probeBackend(engine: Host): Promise<boolean> {
     const asked = { isAnswered: true }
     const probeHost = backendHostOf(engine)
+    const { epoch } = pin
 
     const probed = await Backend.backendOf(
       {
@@ -110,11 +135,18 @@ export function register(on: On) {
       Backend.INSTALLED_BACKEND_PROBES,
     )
 
+    if (epoch !== pin.epoch) {
+      return false
+    }
+
     backend ??= probed
+    pin.isEmpty = backend === null && asked.isAnswered
 
     if (!probed || backend !== probed) {
       return asked.isAnswered || backend !== null
     }
+
+    startPoll(engine, probed)
 
     const stored = PaneState.baseModeOf(
       await engine
@@ -134,7 +166,41 @@ export function register(on: On) {
     return true
   }
 
+  function unpin() {
+    backend = null
+    pin.isEmpty = false
+    pin.epoch += 1
+    polled.toplevel = ''
+    polled.headKey = ''
+    timers.get('poll')?.cancel()
+    timers.delete('poll')
+  }
+
+  function dialogPane(): PaneOpenArgs {
+    return {
+      id: Names.PANE_ID,
+      title: Names.PANE_TITLE,
+      holdToasts: true,
+      closeOnEscape: true,
+      rows: Views.dialogRowsOf(model),
+    }
+  }
+
+  function fitDialog(engine: Host) {
+    const rows = Views.dialogRowsOf(model)
+
+    const isStale =
+      isPaneOpen && model.isFullscreen === false && rows !== dialogRows
+
+    if (isStale) {
+      dialogRows = rows
+      void engine.openPane(dialogPane()).catch(() => undefined)
+    }
+  }
+
   function redraw(engine: Host) {
+    fitDialog(engine)
+
     if (timers.has('redraw')) {
       return
     }
@@ -148,49 +214,79 @@ export function register(on: On) {
     )
   }
 
-  const selectedOf = (): Git.FileStat | null =>
-    PaneState.selectionOf(
-      PaneState.listedOf(
-        PaneState.partitionOf(
-          model.data?.files ?? [],
-          model.isNoiseShown ? 'shown' : 'hidden',
-        ),
-        model.isPreSessionShown ? 'shown' : 'hidden',
-      ),
-      model.selectedPath,
-    )
-
-  async function loadBody(engine: Host): Promise<boolean> {
+  async function loadBodies(engine: Host): Promise<boolean> {
     const { data } = model
-    const selected = selectedOf()
+    const pinned = backend
 
-    if (!data || !selected || !backend) {
-      bodyKey = null
-      model = { ...model, body: null, bodyState: 'idle' }
+    if (!data || !pinned) {
+      bodyStamp = null
+      bodyBase = null
+      bodyLoads.clear()
+      model = { ...model, bodies: PaneState.NO_BODIES }
 
       return false
     }
 
-    const key = `${generation}|${data.baseRef}|${selected.path}`
+    const stamp = bodyStampOf(data)
+    const isNewBase = data.baseRef !== bodyBase
 
-    if (key === bodyKey) {
-      return false
+    if (stamp !== bodyStamp) {
+      bodyStamp = stamp
+      bodyLoads.clear()
     }
 
-    bodyKey = key
-    model = { ...model, body: null, bodyState: 'loading' }
-    redraw(engine)
-
-    const body = await backend.fetchFileHunks(data, selected)
-
-    if (bodyKey !== key) {
-      return body === null
+    if (isNewBase) {
+      bodyBase = data.baseRef
+      model = { ...model, bodies: PaneState.NO_BODIES }
+      redraw(engine)
     }
 
-    model = { ...model, body, bodyState: body ? 'ready' : 'failed' }
-    redraw(engine)
+    return fetchBodies(engine, pinned, data)
+  }
 
-    return body === null
+  const bodyStampOf = (data: Git.DiffData) => `${generation}|${data.baseRef}`
+
+  async function fetchBodies(
+    engine: Host,
+    pinned: Backend.Backend,
+    data: Git.DiffData,
+  ): Promise<boolean> {
+    const stamp = bodyStampOf(data)
+
+    const files = drawnFilesOf(model).filter(file => !bodyLoads.has(file.path))
+
+    for (const file of files) {
+      bodyLoads.add(file.path)
+    }
+
+    const read = await pinned.fetchHunks(data, files)
+    const isCurrent = bodyStamp === stamp && read.size > 0
+
+    if (isCurrent) {
+      model = { ...model, bodies: new Map([...model.bodies, ...read]) }
+      redraw(engine)
+    }
+
+    return [...read.values()].includes(null)
+  }
+
+  function keepBaseline() {
+    const pinned = backend
+
+    if (!pinned || polled.headKey !== '') {
+      return
+    }
+
+    void pinned
+      .headKeyOf()
+      .catch(() => '')
+      .then(key => {
+        const isFirst = backend === pinned && polled.headKey === ''
+
+        if (isFirst) {
+          polled.headKey = key
+        }
+      })
   }
 
   function startPoll(engine: Host, pinned: Backend.Backend) {
@@ -264,14 +360,10 @@ export function register(on: On) {
         case 'data':
           generation += 1
 
-          if (pinned) {
-            startPoll(engine, pinned)
-          }
-
           break
       }
 
-      const hasHunksFailed = await loadBody(engine)
+      const hasHunksFailed = await loadBodies(engine)
 
       if (outcome.kind === 'data') {
         record.mark(
@@ -311,23 +403,65 @@ export function register(on: On) {
     )
   }
 
-  async function openPane(
+  async function markShown(
     engine: Host,
     trigger: (typeof Record.SHOWN_TRIGGERS)[number],
   ): Promise<void> {
-    const pane = { id: Names.PANE_ID, title: Names.PANE_TITLE }
-    const isManual = trigger === 'manual'
-    await engine.openPane(isManual ? { ...pane, ...Names.FOCUSED_PANE } : pane)
-    isPaneOpen = true
-
     const sessionId = await engine.sessionId().catch(() => null)
 
     if (sessionId !== null && sessionId !== shownSessionId) {
       shownSessionId = sessionId
       Record.recorderOf(engine).shown(trigger, Record.widthBucketOf(columns))
     }
+  }
 
-    void refresh(engine)
+  async function openPane(
+    engine: Host,
+    trigger: (typeof Record.SHOWN_TRIGGERS)[number],
+  ): Promise<boolean> {
+    const isDialog = model.isFullscreen === false
+
+    model = {
+      ...model,
+      selectedPath: null,
+      dialogView: 'list',
+      place: { ...model.place, top: 0, listStart: 0 },
+    }
+
+    dialogRows = isDialog ? Views.dialogRowsOf(model) : null
+
+    const landedBefore = landed
+
+    if (!isDialog) {
+      await refresh(engine).catch(() => undefined)
+    }
+
+    const opened = await engine.openPane(
+      isDialog
+        ? { ...dialogPane(), focus: true }
+        : { id: Names.PANE_ID, title: Names.PANE_TITLE, holdToasts: true },
+    )
+
+    const isWaiting = isRecord(opened) && opened.isPlaced === false
+
+    if (isWaiting) {
+      await engine.closePane({ id: Names.PANE_ID }).catch(() => undefined)
+
+      return false
+    }
+
+    isPaneOpen = true
+    keepBaseline()
+
+    await markShown(engine, trigger)
+
+    const isStale = isDialog || landed !== landedBefore
+
+    if (isStale) {
+      void refresh(engine)
+    }
+
+    return true
   }
 
   async function closePane(engine: Host): Promise<void> {
@@ -342,14 +476,6 @@ export function register(on: On) {
     })
   }
 
-  async function wasDrawnWhenProbed(engine: Host): Promise<boolean> {
-    wasDrawnSinceProbe = false
-    engine.invalidate()
-    await engine.sleep(Limits.OPEN_PROBE_MS)
-
-    return wasDrawnSinceProbe
-  }
-
   async function openOnFirstEdit(engine: Host): Promise<void> {
     const isTaken = () => isPaneOpen || hasAutoOpened
 
@@ -358,27 +484,47 @@ export function register(on: On) {
     }
 
     const preference = await engine.storeGet(Names.STORE_OPEN_KEY)
-
-    await pinBackend(engine)
-
     const isKeptOpen = preference === true
 
     const floor = isKeptOpen
       ? Limits.OPEN_MIN_COLUMNS
       : Limits.AUTO_OPEN_MIN_COLUMNS
 
-    const isEligible =
+    const hasRoom =
       preference !== false &&
+      model.isFullscreen === true &&
       columns !== null &&
-      columns >= floor &&
-      backend !== null
+      columns >= floor
 
-    if (!isEligible || isTaken()) {
+    if (!hasRoom || isTaken()) {
+      return
+    }
+
+    const isCheckpointed = await engine.isCheckpointing().catch(() => true)
+
+    if (!isCheckpointed || isTaken()) {
+      return
+    }
+
+    await pinBackend(engine)
+
+    if (!backend || isTaken()) {
       return
     }
 
     hasAutoOpened = true
-    await openPane(engine, 'auto_open')
+    hasAutoOpened = await openPane(engine, 'auto_open')
+  }
+
+  async function openOnRestore(engine: Host): Promise<void> {
+    hasRestoredEdits =
+      Turns.turnDiffsOf(
+        await engine.messages().catch((): SessionMessage[] => []),
+      ).length > 0
+
+    if (hasRestoredEdits) {
+      await openOnFirstEdit(engine)
+    }
   }
 
   function disarm(engine: Host) {
@@ -389,29 +535,43 @@ export function register(on: On) {
 
   const actionsOf = (engine: Host): Views.PaneActions => ({
     selectFile: path => {
-      model = { ...model, selectedPath: path }
-      void loadBody(engine)
+      const isDocked = model.placement === 'dock'
+
+      model = {
+        ...model,
+        selectedPath: path,
+        dialogView: isDocked ? model.dialogView : 'detail',
+        place: isDocked ? Views.placeAtFile(model, path) : model.place,
+      }
+
+      redraw(engine)
+    },
+    scrollList: delta => {
+      model = { ...model, place: Views.listScrolledBy(model, delta) }
       redraw(engine)
     },
     toggleNoise: () => {
       model = { ...model, isNoiseShown: !model.isNoiseShown }
-      void loadBody(engine)
+      void loadBodies(engine)
       redraw(engine)
     },
     togglePreSession: () => {
       model = { ...model, isPreSessionShown: !model.isPreSessionShown }
-      void loadBody(engine)
+      void loadBodies(engine)
       redraw(engine)
     },
-    chooseBase: value => {
-      const mode = PaneState.baseModeOf(value)
+    cycleBase: () => {
+      const { baseModes, requestedMode } = model
 
-      if (!mode || mode === model.requestedMode) {
+      const mode =
+        baseModes[(baseModes.indexOf(requestedMode) + 1) % baseModes.length] ??
+        requestedMode
+
+      if (mode === requestedMode) {
         return
       }
 
-      bodyKey = null
-      model = { ...model, requestedMode: mode, body: null, bodyState: 'idle' }
+      model = { ...model, requestedMode: mode }
 
       Record.recorderOf(engine).mark(Record.FEATURES.baseSwitch, {
         kind: 'ok',
@@ -437,8 +597,7 @@ export function register(on: On) {
         ? { kind: 'turn', index }
         : { kind: 'current' }
 
-      model = { ...model, source, selectedPath: null }
-      void loadBody(engine)
+      model = { ...model, source, selectedPath: null, dialogView: 'list' }
       redraw(engine)
     },
     toggleAsk: path => {
@@ -451,12 +610,6 @@ export function register(on: On) {
 
       arm(engine, path)
     },
-    close: () => {
-      void closePane(engine)
-        .then(() => markTabSwitch(engine, 'convo'))
-        .then(() => engine.storeSet(Names.STORE_OPEN_KEY, false))
-        .catch(() => undefined)
-    },
   })
 
   function arm(engine: Host, path: string) {
@@ -464,7 +617,7 @@ export function register(on: On) {
       path,
       PaneState.pickedTurnOf(model)?.files.find(file => file.path === path)
         ?.hunks ??
-        model.body?.hunks ??
+        model.bodies.get(path)?.hunks ??
         [],
     )
 
@@ -478,8 +631,15 @@ export function register(on: On) {
     redraw(engine)
   }
 
-  async function bind(engine: Host): Promise<void> {
-    sessionStartMs = await engine.now()
+  async function startedAtOf(engine: Host): Promise<number | null> {
+    const startedAt: unknown = await engine.startedAt().catch(() => undefined)
+
+    return typeof startedAt === 'number' ? startedAt : null
+  }
+
+  async function bind(engine: Host, cwd: string): Promise<void> {
+    sessionStartMs = (await startedAtOf(engine)) ?? (await engine.now())
+    pin.cwd = cwd
 
     try {
       await engine.registerCommand(COMMAND_SPEC)
@@ -490,43 +650,69 @@ export function register(on: On) {
       if (!Names.BUILTIN_HOLDS_PATTERN.test(reason)) {
         engine.uiLog(Names.registerFailedTextOf(Views.sanitizeName(reason)))
       }
-
-      return
     }
-
-    await pinBackend(engine)
   }
 
   on('session.start', async ($, e, next) => {
-    await bind({
-      now: () => $.clock.now(),
-      after: (ms, fn) => $.clock.after(ms, fn),
-      every: (ms, fn) => $.clock.every(ms, fn),
-      sleep: ms => $.clock.sleep(ms),
-      run: (argv, init) => $.process.run(argv, init),
-      stat: path => $.fs.stat(path),
-      listDir: path => $.fs.list(path),
-      readFile: path => $.fs.read(path),
-      storeGet: key => $.store.get(key),
-      storeSet: (key, value) => $.store.set(key, value),
-      messages: () => $.session.messages(),
-      invalidate: () => $.ui.invalidate('ui.render'),
-      status: text => $.ui.status(text),
-      uiLog: text => $.ui.log(text),
-      openPane: pane => $.ui.open(pane),
-      closePane: pane => $.ui.close(pane),
-      registerCommand: spec => $.command.register(spec),
-      sessionId: () => $.session.id(),
-      mark: entry => $.telemetry.mark(entry),
-      log: entry => $.telemetry.log(entry),
-    })
+    await bind(
+      {
+        now: () => $.clock.now(),
+        after: (ms, fn) => $.clock.after(ms, fn),
+        every: (ms, fn) => $.clock.every(ms, fn),
+        run: (argv, init) => $.process.run(argv, init),
+        stat: path => $.fs.stat(path),
+        listDir: path => $.fs.list(path),
+        readFile: path => $.fs.read(path),
+        storeGet: key => $.store.get(key),
+        storeSet: (key, value) => $.store.set(key, value),
+        isCheckpointing: async () =>
+          isCheckpointing(
+            await $.settings.read(),
+            await $.env.get('CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING'),
+          ),
+        messages: () => $.session.messages(),
+        invalidate: () => $.ui.invalidate('ui.render'),
+        status: text => $.ui.status(text),
+        uiLog: text => $.ui.log(text),
+        openPane: pane => $.ui.open(pane),
+        closePane: pane => $.ui.close(pane),
+        registerCommand: spec => $.command.register(spec),
+        sessionId: () => $.session.id(),
+        startedAt: () =>
+          $.session
+            .usage()
+            .then((usage: unknown) =>
+              isRecord(usage) ? usage.startedAt : undefined,
+            ),
+        mark: entry => $.telemetry.mark(entry),
+        log: entry => $.telemetry.log(entry),
+      },
+      e.cwd,
+    )
+
+    if (host) {
+      void openOnRestore(host).catch(() => undefined)
+    }
 
     return next(e)
   })
 
   on('ui.render', { component: 'PromptHint' }, ($, e, next) => {
     if (isOnPaneSurface(e)) {
-      columns = e.viewport?.columns ?? columns
+      const { viewport } = e
+
+      const isFirstMeasure = columns === null && viewport?.columns !== undefined
+
+      columns = viewport?.columns ?? columns
+
+      model = {
+        ...model,
+        isFullscreen: viewport?.isFullscreen ?? model.isFullscreen,
+      }
+
+      if (isFirstMeasure && hasRestoredEdits && host) {
+        void openOnFirstEdit(host).catch(() => undefined)
+      }
     }
 
     return next(e)
@@ -539,9 +725,20 @@ export function register(on: On) {
 
     const { Box, Text, Button, Select, Code } = await $.ui.resolve(e)
 
-    wasDrawnSinceProbe = true
     columns = e.viewport?.columns ?? columns
-    model = { ...model, isFocused: e.props.isFocused }
+
+    model = {
+      ...model,
+      placement: e.props.placement,
+      place: {
+        ...model.place,
+        columns: Math.max(
+          1,
+          e.props.bodyColumns - Limits.PANE_RIGHT_PAD_COLUMNS,
+        ),
+        rows: e.props.scroll.bodyRows,
+      },
+    }
 
     return Views.paneView(
       {
@@ -551,11 +748,11 @@ export function register(on: On) {
         rows: e.props.scroll.bodyRows,
       },
       model,
-      e.props.placement,
+      { placement: e.props.placement, terminalColumns: columns },
     )
   })
 
-  on('command.run', { command: Names.COMMAND_NAME }, async ($, e, next) => {
+  on('command.run', { command: 'diff' }, async ($, e, next) => {
     if (!host) {
       return next(e)
     }
@@ -570,10 +767,14 @@ export function register(on: On) {
       }
     }
 
+    const { isFullscreen } = e.presentation
+
+    columns = e.presentation.columns
+    model = { ...model, isFullscreen }
+
     const toggle = PaneToggle.paneToggleOf({
-      isBelievedOpen: isPaneOpen,
-      wasDrawnWhenProbed: isPaneOpen && (await wasDrawnWhenProbed(host)),
-      columns,
+      isOpen: isPaneOpen,
+      columns: isFullscreen ? columns : null,
     })
 
     if (toggle === 'too-narrow') {
@@ -581,9 +782,106 @@ export function register(on: On) {
     }
 
     const isOpening = toggle === 'open'
-    await (isOpening ? openPane(host, 'manual') : closePane(host))
+
+    const isDone = isOpening
+      ? await openPane(host, 'manual')
+      : await closePane(host).then(() => true)
+
+    if (!isDone) {
+      return { text: Names.RESIZE_TERMINAL_TEXT }
+    }
+
+    if (!isFullscreen) {
+      return isOpening ? {} : { text: Names.DIALOG_DISMISSED_TEXT }
+    }
+
     markTabSwitch(host, isOpening ? 'diff' : 'convo')
     await host.storeSet(Names.STORE_OPEN_KEY, isOpening).catch(() => undefined)
+
+    return {
+      text: isOpening ? Names.PANEL_SHOWN_TEXT : Names.PANEL_HIDDEN_TEXT,
+    }
+  })
+
+  on('ui.close', { id: Names.PANE_ID }, async ($, e, next) => {
+    const isBack =
+      e.origin.kind === 'person' &&
+      model.placement === 'inline' &&
+      model.dialogView === 'detail'
+
+    if (isBack && host) {
+      model = { ...model, dialogView: 'list' }
+      redraw(host)
+
+      dialogRows = Views.dialogRowsOf(model)
+
+      void host
+        .openPane({ ...dialogPane(), focus: true })
+        .catch(() => undefined)
+
+      return { deny: 'back to the file list' }
+    }
+
+    const result = await next(e)
+    const isClosed = result.deny === undefined
+    const isPersons = isClosed && e.origin.kind === 'person'
+
+    if (isClosed) {
+      isPaneOpen = false
+    }
+
+    const isDialog = model.isFullscreen === false
+
+    if (isPersons && host && isDialog) {
+      host.uiLog(Names.DIALOG_DISMISSED_TEXT)
+    }
+
+    if (isPersons && host && !isDialog) {
+      markTabSwitch(host, 'convo')
+      await host.storeSet(Names.STORE_OPEN_KEY, false).catch(() => undefined)
+    }
+
+    return result
+  })
+
+  on('ui.focus', { plugin: Names.PLUGIN_NAMES }, ($, e, next) => {
+    const isListed =
+      model.placement === 'inline' && model.dialogView === 'list' && host
+
+    const focus = isListed ? Views.dialogFocusOf(model, e.element) : null
+
+    if (focus === 'stay') {
+      return {}
+    }
+
+    if (!focus || !host) {
+      return next(e)
+    }
+
+    model = { ...model, selectedPath: focus.selectedPath }
+    fitDialog(host)
+    host.invalidate()
+
+    return next({ ...e, element: focus.landing })
+  })
+
+  on('ui.scroll', { requestId: Names.PANE_ID }, ($, e, next) => {
+    const isOwnBody = e.origin.kind === 'person' && model.placement === 'dock'
+
+    if (!isOwnBody || !host) {
+      return next(e)
+    }
+
+    const isOverList = Views.isWheelOverList(model, e)
+
+    model = {
+      ...model,
+      place: isOverList
+        ? Views.listScrolledBy(model, e.by)
+        : Views.bodyScrolledBy(model, e),
+    }
+
+    host.invalidate()
 
     return {}
   })
@@ -591,59 +889,91 @@ export function register(on: On) {
   on('command.run', { command: ['clear', 'resume'] }, async ($, e, next) => {
     const result = await next(e)
 
-    if (host) {
-      if (isPaneOpen) {
-        await closePane(host).catch(() => undefined)
-      }
+    if (!host) {
+      return result
+    }
 
-      hasAutoOpened = false
-      bodyKey = null
-      disarm(host)
-      model = PaneState.afterNewSession(model)
+    const isResume = e.command === 'resume'
+    const isKeptOpen = isPaneOpen && !isResume
+
+    if (isPaneOpen && isResume) {
+      await closePane(host).catch(() => undefined)
+    }
+
+    unpin()
+    hasAutoOpened = false
+    hasRestoredEdits = false
+    bodyStamp = null
+    bodyBase = null
+    bodyLoads.clear()
+    disarm(host)
+    model = PaneState.afterNewSession(model)
+
+    sessionStartMs =
+      (await startedAtOf(host)) ??
+      (isResume ? sessionStartMs : await host.now())
+
+    if (isKeptOpen) {
+      await markShown(host, 'manual')
+      await pinBackend(host)
+      keepBaseline()
+      void refresh(host)
+    }
+
+    if (isResume) {
+      void openOnRestore(host).catch(() => undefined)
     }
 
     return result
   })
 
-  on('tool.call', { tool: [...Tools.EDITING_TOOLS] }, async ($, e, next) => {
-    let result: ResultOf['tool.call'] | undefined
+  function afterTool(
+    engine: Host,
+    e: Args<'tool.call'>,
+    result: ResultOf['tool.call'] | undefined,
+  ) {
+    const isEdit = Tools.EDITING_TOOLS.some(name => name === e.tool)
 
-    try {
-      result = await next(e)
+    const hasEdited =
+      isEdit &&
+      result !== undefined &&
+      result.deny === undefined &&
+      result.isError !== true
 
-      return result
-    } finally {
-      if (host) {
-        if (isPaneOpen) {
-          scheduleRefresh(host)
-        }
+    const hasLanded = isEdit ? hasEdited : Tools.mayHaveWritten(result)
 
-        const isEditDone = result !== undefined && !('deny' in result)
+    if (hasLanded) {
+      landed += 1
+    }
 
-        if (isEditDone) {
-          void openOnFirstEdit(host).catch(() => undefined)
+    if (hasLanded && isPaneOpen) {
+      scheduleRefresh(engine)
+    }
+
+    const isMainLoopEdit = hasEdited && e.agentId === undefined
+
+    if (isMainLoopEdit) {
+      void openOnFirstEdit(engine).catch(() => undefined)
+    }
+  }
+
+  on(
+    'tool.call',
+    { tool: [...Tools.EDITING_TOOLS, ...Tools.SHELL_TOOLS] },
+    async ($, e, next) => {
+      let result: ResultOf['tool.call'] | undefined
+
+      try {
+        result = await next(e)
+
+        return result
+      } finally {
+        if (host) {
+          afterTool(host, e, result)
         }
       }
-    }
-  })
-
-  on('tool.call', { tool: [...Tools.SHELL_TOOLS] }, async ($, e, next) => {
-    try {
-      return await next(e)
-    } finally {
-      if (host && isPaneOpen) {
-        scheduleRefresh(host)
-      }
-    }
-  })
-
-  on('turn.complete', ($, e, next) => {
-    if (host && isPaneOpen) {
-      scheduleRefresh(host)
-    }
-
-    return next(e)
-  })
+    },
+  )
 
   on('prompt.submit', async ($, e, next) => {
     const asked = armed

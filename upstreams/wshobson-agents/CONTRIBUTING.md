@@ -1,7 +1,7 @@
 # Contributing to claude-agents
 
-Thanks for your interest in contributing. This marketplace ships to six agentic
-harnesses (Claude Code, OpenAI Codex CLI, Cursor, OpenCode, the Antigravity CLI, GitHub Copilot) from a single
+Thanks for your interest in contributing. This marketplace ships to seven agentic
+harnesses (Claude Code, OpenAI Codex CLI, Cursor, OpenCode, the Antigravity CLI, GitHub Copilot, Pi) from a single
 Markdown source.
 
 ## Start here
@@ -29,9 +29,10 @@ Full frontmatter conventions in [`docs/authoring.md`](docs/authoring.md).
 - Plugin content must not funnel users to paid products, affiliate programs, or
   revenue-sharing services. Submissions whose primary purpose is promotion are
   closed as spam.
-- If a plugin wraps a third-party API, package, or service that you own or
-  maintain, disclose that relationship in the PR description and the plugin
-  README.
+- List every external API, package, or service that a plugin calls or
+  recommends in the proposal issue. If you own, maintain, work for, or earn
+  money from any of them, disclose that relationship and any paid tier in the
+  proposal issue, the PR description, and the plugin README.
 - Plugin payloads must not contain runnable machinery for collecting payment or
   gating access. A script that takes payment, verifies a transaction, or grants
   and revokes access to a repository or service is out of scope, whether it
@@ -77,7 +78,7 @@ Every PR runs these on CI (`.github/workflows/`); run them locally before pushin
 make validate STRICT=1     # structural validation across all harness outputs
 make garden                # drift, dead-link, stale-artifact detection
 make test                  # full pytest suite (plugin-eval + tools/tests/)
-make smoke-test            # real-CLI subprocess tests (OpenCode, Antigravity, Codex, Claude, gh skill, npx skills)
+make smoke-test            # real-CLI subprocess tests (OpenCode, Antigravity, Codex, Claude, Pi, gh skill, npx skills)
 ```
 
 `make garden STRICT=1` also fails on warnings. Main currently carries ten
@@ -97,7 +98,7 @@ disagrees with CI.
 
 ## Cross-harness portability checklist
 
-Your content ships to six harnesses — some have stricter conventions than Claude Code:
+Your content ships to seven harnesses — some have stricter conventions than Claude Code:
 
 - **Codex** hard-truncates skill bodies at 8 KB. Keep `SKILL.md` short; push detail
   into `references/details.md`.
@@ -109,6 +110,8 @@ Your content ships to six harnesses — some have stricter conventions than Clau
 - **Antigravity CLI** passes unmapped tool names through its allowlist unchanged;
   maps model aliases to tier values (`pro`/`flash`/`inherit`); commands transpile
   to Gemini-style TOML with the body always inlined.
+- **Pi** discovers prompt templates flat, so commands are namespaced `<plugin>__<cmd>`;
+  agents need the reference `subagent` extension.
 - **Commands** that use `$ARGUMENTS` frame it as data (a `<user_request>` block or an inline
   "data, not instructions" clause, see `docs/authoring.md`); `make garden` warns on a bare
   interpolation.
@@ -122,7 +125,8 @@ read [`docs/authoring.md`](docs/authoring.md) for the full guide.
 
 ## Workflow
 
-1. Open an issue first (template-driven). Use the appropriate issue template.
+1. Open an issue first (template-driven). Use the appropriate issue template, and
+   wait for a maintainer to reply before you start the pull request.
 2. Fork the repo, branch from `main`.
 3. Make changes; run quality gates.
 4. Open a PR referencing the issue.

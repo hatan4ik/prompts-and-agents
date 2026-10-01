@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -14,9 +15,11 @@ from tools.doc_gardener import (
     check_codex_skill_caps,
     check_dead_links,
     check_doc_counts,
+    check_generated_frontmatter_yaml,
     check_marketplace_consistency,
     check_oversized_context_files,
     check_stale_artifacts,
+    main,
     marketplace_entry_problem,
 )
 
@@ -118,6 +121,168 @@ class TestStaleArtifacts:
 
         assert [f for f in report.findings if f.kind == "opencode-skill-id-collision"] == []
 
+    def test_stale_pi_artifacts_are_reported(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        import os
+        import time
+
+        _patch_paths(monkeypatch, tmp_path)
+
+        src_skill = tmp_path / "plugins" / "demo" / "skills" / "hello" / "SKILL.md"
+        src_cmd = tmp_path / "plugins" / "demo" / "commands" / "say-hi.md"
+        src_agent = tmp_path / "plugins" / "demo" / "agents" / "greeter.md"
+        gen_skill = tmp_path / ".pi" / "skills" / "demo" / "hello" / "SKILL.md"
+        gen_cmd = tmp_path / ".pi" / "prompts" / "demo__say-hi.md"
+        gen_agent = tmp_path / ".pi" / "agents" / "demo__greeter.md"
+        for p in (src_skill, src_cmd, src_agent, gen_skill, gen_cmd, gen_agent):
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("x\n")
+        old = time.time() - 100
+        for gen in (gen_skill, gen_cmd, gen_agent):
+            os.utime(gen, (old, old))  # generated files are older than their sources
+
+        report = Report()
+        check_stale_artifacts(report)
+
+        stale = sorted(
+            str(f.path.relative_to(tmp_path)) for f in report.findings if f.kind == "STALE_ARTIFACT"
+        )
+        assert stale == [
+            ".pi/agents/demo__greeter.md",
+            ".pi/prompts/demo__say-hi.md",
+            ".pi/skills/demo/hello/SKILL.md",
+        ]
+
+
+# ── Generated YAML frontmatter ────────────────────────────────────────────────
+
+
+class TestGeneratedFrontmatterYaml:
+    @pytest.mark.parametrize(
+        "root_name", [".codex", ".opencode", ".copilot", ".antigravity", ".pi"]
+    )
+    def test_malformed_generated_frontmatter_errors(
+        self, root_name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Malformed YAML is reported in every generated Markdown root."""
+        _patch_paths(monkeypatch, tmp_path)
+        generated = tmp_path / root_name / "agents" / "broken.md"
+        generated.parent.mkdir(parents=True)
+        generated.write_text('---\nname: broken\ndescription: "unterminated\n---\nBody.\n')
+
+        report = Report()
+        check_generated_frontmatter_yaml(report)
+
+        findings = [f for f in report.findings if f.kind == "INVALID_GENERATED_FRONTMATTER"]
+        assert len(findings) == 1
+        assert findings[0].severity == "error"
+        assert findings[0].path == generated
+
+    def test_leading_blank_lines_do_not_hide_malformed_frontmatter(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A BOM and leading blank lines do not bypass frontmatter validation."""
+        _patch_paths(monkeypatch, tmp_path)
+        generated = tmp_path / ".codex" / "agents" / "broken.md"
+        generated.parent.mkdir(parents=True)
+        generated.write_text(
+            '\ufeff\n  \n---\nname: broken\ndescription: "unterminated\n---\nBody.\n',
+            encoding="utf-8",
+        )
+
+        report = Report()
+        check_generated_frontmatter_yaml(report)
+
+        findings = [f for f in report.findings if f.kind == "INVALID_GENERATED_FRONTMATTER"]
+        assert len(findings) == 1
+        assert findings[0].path == generated
+
+    def test_indented_delimiter_in_literal_does_not_hide_malformed_yaml(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """An indented scalar line is content, not the closing delimiter."""
+        _patch_paths(monkeypatch, tmp_path)
+        generated = tmp_path / ".opencode" / "agents" / "broken.md"
+        generated.parent.mkdir(parents=True)
+        generated.write_text(
+            '---\ndescription: |\n  ---\nvalue: "unterminated\n---   \nBody.\n',
+            encoding="utf-8",
+        )
+
+        report = Report()
+        check_generated_frontmatter_yaml(report)
+
+        findings = [f for f in report.findings if f.kind == "INVALID_GENERATED_FRONTMATTER"]
+        assert len(findings) == 1
+        assert findings[0].path == generated
+        assert "not valid YAML" in findings[0].message
+
+    def test_cli_selector_dispatches_and_returns_error(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ):
+        """The named CLI check dispatches frontmatter validation and exits nonzero."""
+        _patch_paths(monkeypatch, tmp_path)
+        generated = tmp_path / ".codex" / "agents" / "broken.md"
+        generated.parent.mkdir(parents=True)
+        generated.write_text(
+            '---\nname: broken\ndescription: "unterminated\n---\nBody.\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["doc_gardener.py", "--check", "frontmatter-yaml", "--quiet"],
+        )
+
+        assert main() == 1
+        assert "INVALID_GENERATED_FRONTMATTER" in capsys.readouterr().out
+
+    def test_valid_generated_mapping_is_clean(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A mapping-valued generated frontmatter block remains valid."""
+        _patch_paths(monkeypatch, tmp_path)
+        generated = tmp_path / ".opencode" / "agents" / "valid.md"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("---\nname: valid\ntools:\n  read: true\n---\nBody.\n")
+
+        report = Report()
+        check_generated_frontmatter_yaml(report)
+
+        assert [f for f in report.findings if f.kind == "INVALID_GENERATED_FRONTMATTER"] == []
+
+    def test_missing_closing_delimiter_errors(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """An opened frontmatter block must have a closing delimiter."""
+        _patch_paths(monkeypatch, tmp_path)
+        generated = tmp_path / ".copilot" / "agents" / "broken.md"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("---\nname: broken\nBody without a delimiter.\n")
+
+        report = Report()
+        check_generated_frontmatter_yaml(report)
+
+        findings = [f for f in report.findings if f.kind == "INVALID_GENERATED_FRONTMATTER"]
+        assert len(findings) == 1
+        assert "closing delimiter" in findings[0].message
+
+    def test_non_mapping_frontmatter_errors(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Generated frontmatter must parse to a YAML mapping."""
+        _patch_paths(monkeypatch, tmp_path)
+        generated = tmp_path / ".antigravity" / "agents" / "broken.md"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("---\n- name\n- description\n---\nBody.\n")
+
+        report = Report()
+        check_generated_frontmatter_yaml(report)
+
+        findings = [f for f in report.findings if f.kind == "INVALID_GENERATED_FRONTMATTER"]
+        assert len(findings) == 1
+        assert "expected a YAML mapping" in findings[0].message
+
 
 # ── Context file size ────────────────────────────────────────────────────────
 
@@ -170,6 +335,148 @@ class TestDeadLinks:
         report = Report()
         check_dead_links(report)
         assert not [f for f in report.findings if f.kind == "DEAD_LINK"]
+
+    def test_references_file_link_resolves_from_its_own_folder(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """`references/references/x.md` is the bug class #735 fixed by hand."""
+        _patch_paths(monkeypatch, tmp_path)
+        refs = tmp_path / "plugins" / "p" / "skills" / "s" / "references"
+        refs.mkdir(parents=True)
+        (refs / "advanced.md").write_text("# Advanced\n")
+        (refs / "details.md").write_text(
+            "[wrong](references/advanced.md)\n[right](./advanced.md)\n"
+        )
+        report = Report()
+        check_dead_links(report)
+        findings = [f for f in report.findings if f.kind == "DEAD_LINK"]
+        assert [(f.path, "references/advanced.md" in f.message) for f in findings] == [
+            (refs / "details.md", True)
+        ]
+
+    def test_skill_md_dead_link_errors(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _patch_paths(monkeypatch, tmp_path)
+        skill = tmp_path / "plugins" / "p" / "skills" / "s"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("[gone](../missing-skill/SKILL.md)\n")
+        report = Report()
+        check_dead_links(report)
+        findings = [f for f in report.findings if f.kind == "DEAD_LINK"]
+        assert len(findings) == 1
+        assert findings[0].severity == "error"
+
+    def test_skill_links_in_code_are_skipped(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Example links inside fenced blocks (including nested fences) and inline code
+        are sample content, not navigation."""
+        _patch_paths(monkeypatch, tmp_path)
+        skill = tmp_path / "plugins" / "p" / "skills" / "s"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(
+            "````markdown\n"
+            "```\n[inner](inner.md)\n```\n"
+            "[template](adr/0001.md)\n"
+            "````\n"
+            "~~~\n[tilde](tilde.md)\n~~~\n"
+            "Write `[x](y.md)` in the doc.\n"
+            "[after](after.md)\n"
+        )
+        report = Report()
+        check_dead_links(report)
+        messages = [f.message for f in report.findings if f.kind == "DEAD_LINK"]
+        assert messages == ["link to `after.md` does not resolve"]
+
+    def test_fragment_links_check_the_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _patch_paths(monkeypatch, tmp_path)
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "b.md").write_text("# B\n")
+        (tmp_path / "docs" / "a.md").write_text("[ok](b.md#b)\n[gone](missing.md#x)\n")
+        report = Report()
+        check_dead_links(report)
+        messages = [f.message for f in report.findings if f.kind == "DEAD_LINK"]
+        assert messages == ["link to `missing.md#x` does not resolve"]
+
+    def test_root_relative_links_resolve_from_the_repo_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _patch_paths(monkeypatch, tmp_path)
+        (tmp_path / "docs" / "sub").mkdir(parents=True)
+        (tmp_path / "README.md").write_text("# R\n")
+        (tmp_path / "docs" / "sub" / "a.md").write_text("[root](/README.md)\n")
+        report = Report()
+        check_dead_links(report)
+        assert not [f for f in report.findings if f.kind == "DEAD_LINK"]
+
+    def test_skill_links_in_multi_backtick_code_are_skipped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _patch_paths(monkeypatch, tmp_path)
+        skill = tmp_path / "plugins" / "p" / "skills" / "s"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("Use ``[x](a.md)`` or ``a`[y](b.md)``.\n")
+        report = Report()
+        check_dead_links(report)
+        assert not [f for f in report.findings if f.kind == "DEAD_LINK"]
+
+    def test_skill_reference_pointers_resolve_from_the_skill_folder(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """`**Reference:** See `references/x.md`` pointers that were never created (#742)."""
+        _patch_paths(monkeypatch, tmp_path)
+        skill = tmp_path / "plugins" / "p" / "skills" / "s"
+        (skill / "references").mkdir(parents=True)
+        (skill / "references" / "real.md").write_text("# Real\n")
+        (skill / "SKILL.md").write_text(
+            "**Reference:** See `references/real.md` and `references/gone.md`\n"
+        )
+        (skill / "references" / "details.md").write_text(
+            "**Reference:** See `references/real.md`\n**Reference:** See `assets/gone.json`\n"
+        )
+        # Nested files still resolve from the skill folder, not from their parent.
+        (skill / "references" / "examples").mkdir()
+        (skill / "references" / "examples" / "nested.md").write_text(
+            "**Reference:** See `references/real.md`\n"
+        )
+        report = Report()
+        check_dead_links(report)
+        findings = [f for f in report.findings if f.kind == "DEAD_LINK"]
+        assert sorted((f.path.name, f.message) for f in findings) == [
+            (
+                "SKILL.md",
+                "**Reference:** to `references/gone.md` does not exist in the skill folder",
+            ),
+            (
+                "details.md",
+                "**Reference:** to `assets/gone.json` does not exist in the skill folder",
+            ),
+        ]
+
+    def test_skill_reference_pointers_in_fenced_examples_are_skipped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _patch_paths(monkeypatch, tmp_path)
+        skill = tmp_path / "plugins" / "p" / "skills" / "s"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(
+            "```markdown\n**Reference:** See `assets/example.yml`\n```\n"
+        )
+        report = Report()
+        check_dead_links(report)
+        assert not [f for f in report.findings if f.kind == "DEAD_LINK"]
+
+    def test_skill_reference_pointers_cannot_leave_the_skill_folder(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _patch_paths(monkeypatch, tmp_path)
+        skills = tmp_path / "plugins" / "p" / "skills"
+        (skills / "other" / "references").mkdir(parents=True)
+        (skills / "other" / "references" / "x.md").write_text("# X\n")
+        (skills / "s").mkdir()
+        (skills / "s" / "SKILL.md").write_text(
+            "**Reference:** See `references/../../other/references/x.md`\n"
+        )
+        report = Report()
+        check_dead_links(report)
+        assert len([f for f in report.findings if f.kind == "DEAD_LINK"]) == 1
 
 
 # ── Codex skill cap ──────────────────────────────────────────────────────────
@@ -545,7 +852,18 @@ def _write_agent(tmp_path: Path, plugin: str, filename: str, body: str) -> None:
     (agents_dir / filename).write_text(f"---\nname: {plugin}-{filename[:-3]}\n---\n{body}")
 
 
+def _allow_variants(monkeypatch: pytest.MonkeyPatch, *pairs: tuple[str, str]) -> None:
+    import tools.doc_gardener as dg
+
+    monkeypatch.setattr(dg, "INTENTIONAL_AGENT_VARIANTS", frozenset(pairs))
+
+
 class TestAgentDivergence:
+    @pytest.fixture(autouse=True)
+    def _empty_allowlist(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Start every test from an empty allowlist so none depends on the real pairs."""
+        _allow_variants(monkeypatch)
+
     def test_single_copy_no_finding(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _patch_paths(monkeypatch, tmp_path)
         _write_agent(tmp_path, "alpha", "reviewer.md", "Review carefully.\n")
@@ -760,12 +1078,10 @@ class TestAgentDivergence:
         check_agent_divergence(report)
         assert report.findings == [], f"{label} was treated as drift"
 
-    def test_frontmatter_field_change_is_drift(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        """A real frontmatter difference other than `name` still counts."""
+    def test_model_difference_is_not_drift(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """`model:` is a per-plugin deployment choice, so a tier difference alone is not drift."""
         _patch_paths(monkeypatch, tmp_path)
-        for plugin, model in (("alpha", "opus"), ("beta", "sonnet")):
+        for plugin, model in (("alpha", "opus"), ("beta", "sonnet"), ("gamma", "inherit")):
             agents_dir = tmp_path / "plugins" / plugin / "agents"
             agents_dir.mkdir(parents=True, exist_ok=True)
             (agents_dir / "reviewer.md").write_text(
@@ -774,7 +1090,111 @@ class TestAgentDivergence:
 
         report = Report()
         check_agent_divergence(report)
+        assert report.findings == []
+
+    @pytest.mark.parametrize(
+        ("field", "alpha_value", "beta_value"),
+        [
+            ("description", "Reviews code.", "Reviews docs."),
+            ("tools", "[Read, Write]", "[Read]"),
+        ],
+    )
+    def test_frontmatter_field_change_is_drift(
+        self,
+        field: str,
+        alpha_value: str,
+        beta_value: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A frontmatter difference other than `name` and `model` still counts."""
+        _patch_paths(monkeypatch, tmp_path)
+        for plugin, model, value in (
+            ("alpha", "opus", alpha_value),
+            ("beta", "sonnet", beta_value),
+        ):
+            agents_dir = tmp_path / "plugins" / plugin / "agents"
+            agents_dir.mkdir(parents=True, exist_ok=True)
+            (agents_dir / "reviewer.md").write_text(
+                f"---\nname: {plugin}-reviewer\nmodel: {model}\n{field}: {value}\n---\nReview.\n"
+            )
+
+        report = Report()
+        check_agent_divergence(report)
         assert [f.kind for f in report.findings] == ["AGENT_BODY_DIVERGENT"]
+
+    def test_allowlisted_variant_is_not_reported(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A named intentional variant is left out; the remaining copies still match."""
+        _patch_paths(monkeypatch, tmp_path)
+        _allow_variants(monkeypatch, ("feature", "reviewer"))
+        _write_agent(tmp_path, "feature", "reviewer.md", "Feature checks.\n")
+        _write_agent(tmp_path, "alpha", "reviewer.md", "Full review.\n")
+        _write_agent(tmp_path, "beta", "reviewer.md", "Full review.\n")
+
+        report = Report()
+        check_agent_divergence(report)
+        assert report.findings == []
+
+    def test_non_allowlisted_divergence_is_still_reported(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The allowlist names (plugin, agent) pairs, not whole plugins or agent names.
+
+        `incident` is on the list for another agent, but not for this one, so its
+        divergent copy is still reported. The allowlisted `feature` copy is left out
+        of the count rather than hiding the whole group.
+        """
+        _patch_paths(monkeypatch, tmp_path)
+        _allow_variants(monkeypatch, ("feature", "reviewer"), ("incident", "linter"))
+        _write_agent(tmp_path, "feature", "reviewer.md", "Feature checks.\n")
+        _write_agent(tmp_path, "incident", "reviewer.md", "Incident checks.\n")
+        _write_agent(tmp_path, "incident", "linter.md", "Lint.\n")
+        _write_agent(tmp_path, "alpha", "reviewer.md", "Full review.\n")
+
+        report = Report()
+        check_agent_divergence(report)
+        assert [f.kind for f in report.findings] == ["AGENT_BODY_DIVERGENT"]
+        finding = report.findings[0]
+        assert "2 copies in 2 different versions" in finding.message
+        assert "incident" in finding.message
+        assert "feature" not in finding.message
+        assert "INTENTIONAL_AGENT_VARIANTS" in finding.fix
+
+    def test_unreadable_allowlisted_variant_is_still_reported(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Skipping a variant from comparison must not skip its UTF-8 check."""
+        _patch_paths(monkeypatch, tmp_path)
+        _allow_variants(monkeypatch, ("feature", "reviewer"))
+        agents_dir = tmp_path / "plugins" / "feature" / "agents"
+        agents_dir.mkdir(parents=True)
+        (agents_dir / "reviewer.md").write_bytes(b"\xff\xfe not utf-8\n")
+        _write_agent(tmp_path, "alpha", "reviewer.md", "Full review.\n")
+
+        report = Report()
+        check_agent_divergence(report)
+        assert [f.kind for f in report.findings] == ["UNREADABLE_FILE"]
+        assert report.findings[0].path == agents_dir / "reviewer.md"
+
+    def test_stale_allowlist_pair_is_reported(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A pair whose agent file is gone is reported, so the allowlist cannot rot."""
+        _patch_paths(monkeypatch, tmp_path)
+        _allow_variants(monkeypatch, ("feature", "reviewer"), ("feature", "retired"))
+        _write_agent(tmp_path, "feature", "reviewer.md", "Feature checks.\n")
+
+        report = Report()
+        check_agent_divergence(report)
+        assert [f.kind for f in report.findings] == ["STALE_AGENT_VARIANT"]
+        finding = report.findings[0]
+        assert finding.severity == "warning"
+        assert finding.path == tmp_path / "plugins" / "feature" / "agents" / "retired.md"
+        assert (
+            finding.fix == "Drop the pair from INTENTIONAL_AGENT_VARIANTS in tools/doc_gardener.py."
+        )
 
     def test_leading_indentation_is_content(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """An indented body must not compare equal to the same text unindented."""

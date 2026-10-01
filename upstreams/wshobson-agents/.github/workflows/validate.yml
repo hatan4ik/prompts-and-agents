@@ -216,11 +216,12 @@ jobs:
             .opencode/
             opencode.json
             .antigravity/
+            .pi/
             AGENTS.md
           retention-days: 7
 
   cli-smoke-test:
-    name: Real-CLI smoke test (OpenCode + Antigravity)
+    name: Real-CLI smoke test (OpenCode + Antigravity + Pi)
     runs-on: ubuntu-latest
     # Real-CLI subprocess tests: invokes the actual harness binaries against our
     # generated artifacts to catch issues that pure-Python parsing misses (CLI
@@ -236,21 +237,40 @@ jobs:
           bun-version: latest
 
       - name: Install OpenCode CLI
+        # Pinned. Without a version the installer asks api.github.com for the
+        # latest release, and shared runners hit the unauthenticated rate limit
+        # ("Failed to fetch version information"). Bump alongside the OpenCode
+        # release notes when the adapter needs a newer CLI.
         run: |
-          curl -fsSL https://opencode.ai/install | bash
+          curl -fsSL https://opencode.ai/install | bash -s -- --version 1.18.30
           echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
 
       - name: Install Antigravity CLI
         # Bootstrapper defaults to $HOME/.local/bin; bump alongside any agy
-        # plugin-schema changes it ships.
+        # plugin-schema changes it ships. The CDN sometimes returns the script
+        # gzip-compressed, and bash can't run that from a pipe, so the step
+        # downloads it first and decompresses it when needed.
         run: |
-          curl -fsSL https://antigravity.google/cli/install.sh | bash
+          installer="$RUNNER_TEMP/agy-install.sh"
+          curl -fsSL --compressed --retry 3 -o "$installer" https://antigravity.google/cli/install.sh
+          if gzip -t "$installer" 2>/dev/null; then
+            gunzip -c "$installer" > "$installer.plain"
+            mv "$installer.plain" "$installer"
+          fi
+          bash "$installer"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Set up Node.js (for npx skills)
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: 22
+
+      - name: Install Pi CLI
+        # Pinned to the version the adapter was verified against. Bump alongside any
+        # change to Pi's skill, prompt-template, or agent discovery rules.
+        # Only the direct version is pinned; the package's own dependencies still resolve
+        # within their caret ranges, which is acceptable for a smoke-test CLI install.
+        run: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.85.1
 
       - name: Ensure GitHub CLI has `gh skill` (2.90+)
         # Runner images ship gh, but the skills smoke tests need the `gh skill`
@@ -273,6 +293,7 @@ jobs:
         run: |
           opencode --version
           agy --version
+          pi --version
           gh --version
           gh skill --help > /dev/null   # hard requirement: the skills smoke tests must run, not skip
           npx --version

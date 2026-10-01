@@ -136,7 +136,7 @@
     {
       "name": "block-no-verify",
       "source": "./plugins/block-no-verify",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "description": "PreToolUse hook that prevents AI agents from using --no-verify, --no-gpg-sign, and other bypass flags that skip git hooks",
       "author": {
         "name": "cskwork",
@@ -601,7 +601,7 @@
     {
       "name": "incident-response",
       "source": "./plugins/incident-response",
-      "version": "1.3.2",
+      "version": "1.4.0",
       "description": "Production incident management, triage workflows, and automated incident resolution",
       "author": {
         "name": "Seth Hobson",
@@ -757,13 +757,13 @@
     {
       "name": "plugin-eval",
       "source": "./plugins/plugin-eval",
-      "version": "0.1.1",
-      "description": "Three-layer quality evaluation framework for Claude Code plugins with Elo ranking"
+      "version": "0.1.2",
+      "description": "Static lint for Claude Code plugins and skills, with experimental LLM scoring for skills"
     },
     {
       "name": "pptx-deck-creation",
       "source": "./plugins/pptx-deck-creation",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "description": "Create production-ready, editable PowerPoint decks through a spec-first, coordinate-explicit workflow with read-only reference analysis and quality gates.",
       "author": {
         "name": "kimtth",
@@ -775,7 +775,7 @@
     {
       "name": "protect-mcp",
       "source": "./plugins/protect-mcp",
-      "version": "0.1.1",
+      "version": "0.1.4",
       "description": "Cedar policy enforcement + Ed25519 signed receipts for every Claude Code tool call. First cryptographic governance plugin \u2014 receipts independently verifiable offline.",
       "author": {
         "name": "Tom Farley",
@@ -819,7 +819,7 @@
     {
       "name": "review-agent-governance",
       "source": "./plugins/review-agent-governance",
-      "version": "0.1.1",
+      "version": "0.1.4",
       "description": "Require a human approval signal before an AI agent can post PR reviews, comments, merges, or writes to CI config. Cedar-gated, receipt-signed, designed for the Hermes-style failure mode where a review bot posts without oversight.",
       "author": {
         "name": "Tom Farley",
@@ -907,7 +907,7 @@
     {
       "name": "signed-audit-trails",
       "source": "./plugins/signed-audit-trails",
-      "version": "0.1.1",
+      "version": "0.1.3",
       "description": "Teaching skill: signed audit trails for Claude Code tool calls. Cookbook-style walkthrough of Cedar-gated tool calls with Ed25519 receipts, offline verification, and CI/CD integration. Pairs with the protect-mcp plugin.",
       "author": {
         "name": "Tom Farley",

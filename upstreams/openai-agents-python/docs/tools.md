@@ -56,8 +56,11 @@ agent = Agent(
     ],
 )
 
+
 async def main():
-    result = await Runner.run(agent, "Find recent images and supporting text about the Golden Gate Bridge at sunset.")
+    result = await Runner.run(
+        agent, "Find recent images and supporting text about the Golden Gate Bridge at sunset."
+    )
     print(result.final_output)
 ```
 
@@ -246,6 +249,16 @@ Local runtime tools require you to supply implementations:
 
 Shell action timeouts use positive integer milliseconds for a finite timeout. The SDK treats both `0` and `None` as no explicit timeout before calling a local `ShellTool` executor because zero does not have a portable meaning across executor implementations; other values are rejected before executor invocation. This is specific to the timeout field: `max_output_length=0` remains a supported request for empty captured output.
 
+### Approval for local shell and file edits
+
+Local `ShellTool` and `ApplyPatchTool` default to `needs_approval=False`. With this setting, the SDK can invoke your executor or editor without requesting approval. Your implementation determines where commands run or files change and must enforce the intended resource permissions and isolation; SDK approval does not provide a sandbox.
+
+For commands or file edits that require review, set `needs_approval=True` on the tool, or provide a callable policy that returns `True` for calls that require approval. Without an `on_approval` callback, the run pauses before invoking the executor or editor and returns pending requests in `result.interruptions`. Approve or reject those requests through `RunState`, then resume the run as described in the [human-in-the-loop guide](human_in_the_loop.md).
+
+To decide immediately in application code, set both `needs_approval` and `on_approval`. The SDK invokes `on_approval` only when the call requires approval and has no existing approval decision; setting the callback alone does not enable approval. See `examples/tools/shell.py` for a CLI prompt and `examples/tools/shell_human_in_the_loop.py` for manual interruption handling. The `examples/tools/apply_patch.py` example instead prompts inside its editor before changing files.
+
+Keep `needs_approval=False` when your application intentionally authorizes automatic execution, for example through an executor that enforces your sandbox policy. Hosted shell environments do not support the SDK's local `needs_approval` or `on_approval` settings.
+
 ### ComputerTool and the Responses computer tool
 
 `ComputerTool` is still a local harness: you provide a [`Computer`][agents.computer.Computer] or [`AsyncComputer`][agents.computer.AsyncComputer] implementation, and the SDK maps that harness onto the OpenAI Responses API computer surface.
@@ -276,7 +289,10 @@ from agents.editor import ApplyPatchResult, ApplyPatchOperation, ApplyPatchEdito
 class NoopComputer(AsyncComputer):
     environment = "browser"
     dimensions = (1024, 768)
-    async def screenshot(self): return ""
+
+    async def screenshot(self):
+        return ""
+
     async def click(self, x, y, button): ...
     async def double_click(self, x, y): ...
     async def scroll(self, x, y, scroll_x, scroll_y): ...
@@ -288,9 +304,14 @@ class NoopComputer(AsyncComputer):
 
 
 class NoopEditor(ApplyPatchEditor):
-    async def create_file(self, op: ApplyPatchOperation): return ApplyPatchResult(status="completed")
-    async def update_file(self, op: ApplyPatchOperation): return ApplyPatchResult(status="completed")
-    async def delete_file(self, op: ApplyPatchOperation): return ApplyPatchResult(status="completed")
+    async def create_file(self, op: ApplyPatchOperation):
+        return ApplyPatchResult(status="completed")
+
+    async def update_file(self, op: ApplyPatchOperation):
+        return ApplyPatchResult(status="completed")
+
+    async def delete_file(self, op: ApplyPatchOperation):
+        return ApplyPatchResult(status="completed")
 
 
 async def run_shell(request):
@@ -337,6 +358,7 @@ class Location(TypedDict):
     lat: float
     long: float
 
+
 @tool  # (1)!
 async def fetch_weather(location: Location) -> str:
     # (2)!
@@ -372,7 +394,6 @@ for tool in agent.tools:
         print(tool.description)
         print(json.dumps(tool.params_json_schema, indent=2))
         print()
-
 ```
 
 1.  You can use any Python types as arguments to your functions, and the function can be sync or async.
@@ -475,7 +496,6 @@ from pydantic import BaseModel
 from agents import RunContextWrapper, FunctionTool
 
 
-
 def do_some_work(data: str) -> str:
     return "done"
 
@@ -511,21 +531,31 @@ The code for the schema extraction lives in [`agents.function_schema`][].
 
 You can use Pydantic's [`Field`](https://docs.pydantic.dev/latest/concepts/fields/) to add constraints (e.g. min/max for numbers, length or pattern for strings) and descriptions to tool arguments. As in Pydantic, both forms are supported: default-based (`arg: int = Field(..., ge=1)`) and `Annotated` (`arg: Annotated[int, Field(..., ge=1)]`). The generated JSON schema and validation include these constraints.
 
-For variadic parameters, an annotation describes each collected value. The SDK therefore applies `Annotated[..., Field(...)]` constraints to each value supplied through `*args` or `**kwargs`, while omitted variadic parameters remain valid empty collections. Annotate scalar positional values as `*args: T`. If each positional value is itself a homogeneous tuple, use `*args: tuple[T, ...]`; the SDK rejects fixed-length tuple annotations such as `*args: tuple[int, str]` because one fixed tuple shape cannot describe a variadic sequence of positional values.
+For variadic parameters, an annotation describes each collected value. The SDK therefore applies `Annotated[..., Field(...)]` constraints to each value supplied through `*args` or `**kwargs`, while omitted variadic parameters remain valid empty collections.
+
+The SDK ignores `Field(description=...)` in the annotation of a variadic parameter (`*args` or `**kwargs`). To describe the collected parameter, use a parameter entry in the function docstring or a string in `Annotated`, for example `*scores: Annotated[int, "Exam scores", Field(ge=0, le=100)]`. When docstring parsing is enabled and both sources provide a description, the docstring description takes precedence.
+
+For `**kwargs`, use `@tool(strict_mode=False)` and supply the keyword values in the nested object named after the parameter. For example, a tool with `**scores: int` receives `{"scores": {"exam": 90}}`.
+
+Annotate scalar positional values as `*args: T`. If each positional value is itself a homogeneous tuple, use `*args: tuple[T, ...]`; the SDK rejects fixed-length tuple annotations such as `*args: tuple[int, str]` because one fixed tuple shape cannot describe a variadic sequence of positional values.
 
 ```python
 from typing import Annotated
 from pydantic import Field
 from agents.decorators import tool
 
+
 # Default-based form
 @tool
 def score_a(score: int = Field(..., ge=0, le=100, description="Score from 0 to 100")) -> str:
     return f"Score recorded: {score}"
 
+
 # Annotated form
 @tool
-def score_b(score: Annotated[int, Field(..., ge=0, le=100, description="Score from 0 to 100")]) -> str:
+def score_b(
+    score: Annotated[int, Field(..., ge=0, le=100, description="Score from 0 to 100")],
+) -> str:
     return f"Score recorded: {score}"
 ```
 
@@ -597,21 +627,24 @@ from agents import RunContextWrapper
 from agents.decorators import tool
 from typing import Any
 
+
 def my_custom_error_function(context: RunContextWrapper[Any], error: Exception) -> str:
     """A custom function to provide a user-friendly error message."""
     print(f"A tool call failed with the following error: {error}")
     return "An internal server error occurred. Please try again later."
 
+
 @tool(failure_error_function=my_custom_error_function)
 def get_user_profile(user_id: str) -> str:
     """Fetches a user profile from a mock API.
-     This function demonstrates a 'flaky' or failing API call.
+    This function demonstrates a 'flaky' or failing API call.
     """
     if user_id == "user_123":
         return "User profile for user_123 successfully retrieved."
     else:
-        raise ValueError(f"Could not retrieve profile for user_id: {user_id}. API returned an error.")
-
+        raise ValueError(
+            f"Could not retrieve profile for user_id: {user_id}. API returned an error."
+        )
 ```
 
 If you are manually creating a `FunctionTool` object, then you must handle errors inside the `on_invoke_tool` function.
@@ -653,6 +686,7 @@ orchestrator_agent = Agent(
     ],
 )
 
+
 async def main():
     result = await Runner.run(orchestrator_agent, input="Say 'Hello, how are you?' in Spanish.")
     print(result.final_output)
@@ -678,12 +712,7 @@ async def run_my_agent() -> str:
 
     agent = Agent(name="My agent", instructions="...")
 
-    result = await Runner.run(
-        agent,
-        input="...",
-        max_turns=5,
-        run_config=...
-    )
+    result = await Runner.run(agent, input="...", max_turns=5, run_config=...)
 
     return str(result.final_output)
 ```
@@ -788,12 +817,15 @@ import asyncio
 from agents import Agent, AgentBase, Runner, RunContextWrapper
 from pydantic import BaseModel
 
+
 class LanguageContext(BaseModel):
     language_preference: str = "french_spanish"
+
 
 def french_enabled(ctx: RunContextWrapper[LanguageContext], agent: AgentBase) -> bool:
     """Enable French for French+Spanish preference."""
     return ctx.context.language_preference == "french_spanish"
+
 
 # Create specialized agents
 spanish_agent = Agent(
@@ -828,10 +860,12 @@ orchestrator = Agent(
     ],
 )
 
+
 async def main():
     context = LanguageContext(language_preference="french_spanish")
     result = await Runner.run(orchestrator, "How are you?", context=context)
     print(result.final_output)
+
 
 asyncio.run(main())
 ```

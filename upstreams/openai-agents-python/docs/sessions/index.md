@@ -2,7 +2,7 @@
 
 The Agents SDK provides built-in session memory to automatically maintain conversation history across multiple agent runs, eliminating the need to manually handle `.to_input_list()` between turns.
 
-Sessions stores conversation history for a specific session, allowing agents to maintain context without requiring explicit manual memory management. This is particularly useful for building chat applications or multi-turn conversations where you want the agent to remember previous interactions.
+Sessions store conversation history for a specific session, allowing agents to maintain context without requiring explicit manual memory management. This is particularly useful for building chat applications or multi-turn conversations where you want the agent to remember previous interactions.
 
 Use sessions when you want the SDK to manage client-side memory for you. In the same run, a session cannot be combined with the run-level continuation options `conversation_id`, `previous_response_id`, or `auto_previous_response_id`. If you want OpenAI server-managed continuation instead, choose one of those mechanisms rather than layering a session on top.
 
@@ -21,27 +21,15 @@ agent = Agent(
 session = SQLiteSession("conversation_123")
 
 # First turn
-result = await Runner.run(
-    agent,
-    "What city is the Golden Gate Bridge in?",
-    session=session
-)
+result = await Runner.run(agent, "What city is the Golden Gate Bridge in?", session=session)
 print(result.final_output)  # "San Francisco"
 
 # Second turn - agent automatically remembers previous context
-result = await Runner.run(
-    agent,
-    "What state is it in?",
-    session=session
-)
+result = await Runner.run(agent, "What state is it in?", session=session)
 print(result.final_output)  # "California"
 
 # Also works with synchronous runner
-result = Runner.run_sync(
-    agent,
-    "What's the population?",
-    session=session
-)
+result = Runner.run_sync(agent, "What's the population?", session=session)
 print(result.final_output)  # "Approximately 39 million"
 ```
 
@@ -50,7 +38,9 @@ print(result.final_output)  # "Approximately 39 million"
 If a run pauses for approval, resume it with the same session instance (or another instance configured with the same session ID and the same underlying storage backend) so the resumed turn continues the same stored conversation history.
 
 ```python
-result = await Runner.run(agent, "Delete temporary files that are no longer needed.", session=session)
+result = await Runner.run(
+    agent, "Delete temporary files that are no longer needed.", session=session
+)
 
 if result.interruptions:
     state = result.to_state()
@@ -136,7 +126,7 @@ If your session implementation exposes default session settings, each non-`None`
 
 ### Basic operations
 
-Sessions supports several operations for managing conversation history:
+Sessions support several operations for managing conversation history:
 
 ```python
 from agents import SQLiteSession
@@ -147,10 +137,7 @@ session = SQLiteSession("user_123", "conversations.db")
 items = await session.get_items()
 
 # Add new items to a session
-new_items = [
-    {"role": "user", "content": "Hello"},
-    {"role": "assistant", "content": "Hi there!"}
-]
+new_items = [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi there!"}]
 await session.add_items(new_items)
 
 # Remove and return the most recent item
@@ -172,11 +159,7 @@ agent = Agent(name="Assistant")
 session = SQLiteSession("correction_example")
 
 # Initial conversation
-result = await Runner.run(
-    agent,
-    "What's 2 + 2?",
-    session=session
-)
+result = await Runner.run(agent, "What's 2 + 2?", session=session)
 print(f"Agent: {result.final_output}")
 
 # User wants to correct their question
@@ -184,11 +167,7 @@ assistant_item = await session.pop_item()  # Remove agent's response
 user_item = await session.pop_item()  # Remove user's question
 
 # Ask a corrected question
-result = await Runner.run(
-    agent,
-    "What's 2 + 3?",
-    session=session
-)
+result = await Runner.run(agent, "What's 2 + 3?", session=session)
 print(f"Agent: {result.final_output}")
 ```
 
@@ -237,19 +216,11 @@ session = OpenAIConversationsSession()
 # session = OpenAIConversationsSession(conversation_id="conv_123")
 
 # Start conversation
-result = await Runner.run(
-    agent,
-    "What city is the Golden Gate Bridge in?",
-    session=session
-)
+result = await Runner.run(agent, "What city is the Golden Gate Bridge in?", session=session)
 print(result.final_output)  # "San Francisco"
 
 # Continue the conversation
-result = await Runner.run(
-    agent,
-    "What state is it in?",
-    session=session
-)
+result = await Runner.run(agent, "What state is it in?", session=session)
 print(result.final_output)  # "California"
 ```
 
@@ -323,11 +294,7 @@ session = SQLiteSession("user_123")
 session = SQLiteSession("user_123", "conversations.db")
 
 # Use the session
-result = await Runner.run(
-    agent,
-    "Hello",
-    session=session
-)
+result = await Runner.run(agent, "Hello", session=session)
 ```
 
 ### Async SQLite sessions
@@ -379,13 +346,12 @@ from agents.extensions.memory import SQLAlchemySession
 
 # Using database URL
 session = SQLAlchemySession.from_url(
-    "user_123",
-    url="postgresql+asyncpg://user:pass@localhost/db",
-    create_tables=True
+    "user_123", url="postgresql+asyncpg://user:pass@localhost/db", create_tables=True
 )
 
 # Using existing engine
 from sqlalchemy.ext.asyncio import create_async_engine
+
 engine = create_async_engine("postgresql+asyncpg://user:pass@localhost/db")
 session = SQLAlchemySession("user_123", engine=engine, create_tables=True)
 ```
@@ -466,9 +432,7 @@ from agents.extensions.memory import AdvancedSQLiteSession
 
 # Create with advanced features
 session = AdvancedSQLiteSession(
-    session_id="user_123",
-    db_path="conversations.db",
-    create_tables=True
+    session_id="user_123", db_path="conversations.db", create_tables=True
 )
 
 # Automatic usage tracking
@@ -490,9 +454,7 @@ from agents.extensions.memory import EncryptedSession, SQLAlchemySession
 
 # Create underlying session
 underlying_session = SQLAlchemySession.from_url(
-    "user_123",
-    url="sqlite+aiosqlite:///conversations.db",
-    create_tables=True
+    "user_123", url="sqlite+aiosqlite:///conversations.db", create_tables=True
 )
 
 # Wrap with encryption and TTL
@@ -500,7 +462,7 @@ session = EncryptedSession(
     session_id="user_123",
     underlying_session=underlying_session,
     encryption_key="your-secret-key",
-    ttl=600  # 10 minutes
+    ttl=600,  # 10 minutes
 )
 
 result = await Runner.run(agent, "Hello", session=session)
@@ -535,6 +497,14 @@ Use meaningful session IDs that help you organize conversations:
 -   Use encrypted sessions (`EncryptedSession(session_id, underlying_session, encryption_key)`) to wrap any session with transparent encryption and TTL-based expiration
 -   Consider implementing custom session backends for other production systems (for example, Django) for more advanced use cases
 
+### SQLite storage trust boundary
+
+`SQLiteSession` assumes that the application trusts the SQLite database and its storage. The backend does not authenticate stored rows or detect external edits, deletions, reordering, or replay. A session ID selects conversation history; the session ID does not authenticate a user or authorize access to that history.
+
+When `get_items()` reads history, the method selects rows by `session_id`, orders the rows by their insertion IDs, and decodes each row's `message_data` as JSON. Changes made directly to the database can therefore appear in the history returned to the application and used by the next agent run. Rows whose `message_data` cannot be decoded as JSON are skipped without an integrity error. Changing a row's `created_at` value does not change the returned item or its order.
+
+The application must authorize access to each session and restrict access to the database file, its containing storage, and backups. For deployments that require tamper detection on shared or untrusted storage, use storage controls or a custom [`Session`][agents.memory.session.Session] implementation that enforces the required integrity guarantees. The [`EncryptedSession`](encrypted_session.md) wrapper provides encryption, but does not verify the completeness or order of conversation history and accepts unencrypted items; the wrapper is not a substitute for those integrity controls.
+
 ### Multiple sessions
 
 ```python
@@ -546,16 +516,8 @@ agent = Agent(name="Assistant")
 session_1 = SQLiteSession("user_123", "conversations.db")
 session_2 = SQLiteSession("user_456", "conversations.db")
 
-result1 = await Runner.run(
-    agent,
-    "Help me with my account",
-    session=session_1
-)
-result2 = await Runner.run(
-    agent,
-    "What are my charges?",
-    session=session_2
-)
+result1 = await Runner.run(agent, "Help me with my account", session=session_1)
+result2 = await Runner.run(agent, "What are my charges?", session=session_2)
 ```
 
 ### Session sharing
@@ -567,16 +529,8 @@ billing_agent = Agent(name="Billing")
 session = SQLiteSession("user_123")
 
 # Both agents will see the same conversation history
-result1 = await Runner.run(
-    support_agent,
-    "Help me with my account",
-    session=session
-)
-result2 = await Runner.run(
-    billing_agent,
-    "What are my charges?",
-    session=session
-)
+result1 = await Runner.run(support_agent, "Help me with my account", session=session)
+result2 = await Runner.run(billing_agent, "What are my charges?", session=session)
 ```
 
 ## Complete example
@@ -604,33 +558,21 @@ async def main():
     # First turn
     print("First turn:")
     print("User: What city is the Golden Gate Bridge in?")
-    result = await Runner.run(
-        agent,
-        "What city is the Golden Gate Bridge in?",
-        session=session
-    )
+    result = await Runner.run(agent, "What city is the Golden Gate Bridge in?", session=session)
     print(f"Assistant: {result.final_output}")
     print()
 
     # Second turn - the agent will remember the previous conversation
     print("Second turn:")
     print("User: What state is it in?")
-    result = await Runner.run(
-        agent,
-        "What state is it in?",
-        session=session
-    )
+    result = await Runner.run(agent, "What state is it in?", session=session)
     print(f"Assistant: {result.final_output}")
     print()
 
     # Third turn - continuing the conversation
     print("Third turn:")
     print("User: What's the population of that state?")
-    result = await Runner.run(
-        agent,
-        "What's the population of that state?",
-        session=session
-    )
+    result = await Runner.run(agent, "What's the population of that state?", session=session)
     print(f"Assistant: {result.final_output}")
     print()
 
@@ -680,11 +622,7 @@ class MyCustomSession:
 
 # Use your custom session
 agent = Agent(name="Assistant")
-result = await Runner.run(
-    agent,
-    "Hello",
-    session=MyCustomSession("my_session")
-)
+result = await Runner.run(agent, "Hello", session=MyCustomSession("my_session"))
 ```
 
 ### Accessing run context from a custom session

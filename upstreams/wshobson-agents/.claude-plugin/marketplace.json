@@ -273,7 +273,7 @@
     {
       "name": "incident-response",
       "description": "Production incident management, triage workflows, and automated incident resolution",
-      "version": "1.3.2",
+      "version": "1.4.0",
       "author": {
         "name": "Seth Hobson",
         "email": "seth@major7apps.com"
@@ -1091,8 +1091,8 @@
     {
       "name": "plugin-eval",
       "source": "./plugins/plugin-eval",
-      "description": "Three-layer quality evaluation framework for Claude Code plugins with Elo ranking",
-      "version": "0.1.1",
+      "description": "Static lint for Claude Code plugins and skills, with experimental LLM scoring for skills",
+      "version": "0.1.2",
       "author": {
         "name": "Seth Hobson"
       },
@@ -1103,7 +1103,7 @@
       "name": "block-no-verify",
       "source": "./plugins/block-no-verify",
       "description": "PreToolUse hook that prevents AI agents from using --no-verify, --no-gpg-sign, and other bypass flags that skip git hooks",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "author": {
         "name": "cskwork"
       },
@@ -1135,7 +1135,7 @@
         "source": "git-subdir",
         "url": "https://github.com/hashgraph-online/hol-guard-plugin.git",
         "path": "distributions/wshobson-agents",
-        "sha": "43b2dda59e9f07057c52e69fd7426188faae1488"
+        "sha": "74bea1c01397f4e172721a991e9052556ff0294b"
       },
       "description": "Local pre-execution security controls and pre-install scanning for AI agent tools, packages, skills, plugins, and MCP servers.",
       "version": "0.1.0",
@@ -1159,7 +1159,7 @@
       "name": "protect-mcp",
       "source": "./plugins/protect-mcp",
       "description": "Cedar policy enforcement + Ed25519 signed receipts for every Claude Code tool call. First cryptographic governance plugin \u2014 decisions are policy-gated before they run and every decision produces a tamper-evident receipt verifiable offline.",
-      "version": "0.1.1",
+      "version": "0.1.4",
       "author": {
         "name": "Tom Farley",
         "email": "tommy@scopeblind.com",
@@ -1182,7 +1182,7 @@
       "name": "signed-audit-trails",
       "source": "./plugins/signed-audit-trails",
       "description": "Teaching skill: cookbook-style walkthrough for signed audit trails on every Claude Code tool call. Cedar policy, Ed25519 receipts, offline verification, CI/CD integration, SLSA composition. Pairs with the protect-mcp runtime plugin.",
-      "version": "0.1.1",
+      "version": "0.1.3",
       "author": {
         "name": "Tom Farley",
         "email": "tommy@scopeblind.com",
@@ -1206,7 +1206,7 @@
       "name": "review-agent-governance",
       "source": "./plugins/review-agent-governance",
       "description": "Require a human approval signal before an AI agent can post PR reviews, comments, merges, or writes to CI configuration. Joins protect-mcp and signed-audit-trails in the governance category; composes with protect-mcp for runtime enforcement.",
-      "version": "0.1.1",
+      "version": "0.1.4",
       "author": {
         "name": "Tom Farley",
         "email": "tommy@scopeblind.com",
@@ -1277,7 +1277,7 @@
       "name": "pptx-deck-creation",
       "source": "./plugins/pptx-deck-creation",
       "description": "Create production-ready, editable PowerPoint decks through a spec-first, coordinate-explicit workflow with read-only reference analysis and quality gates.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "author": {
         "name": "kimtth"
       },

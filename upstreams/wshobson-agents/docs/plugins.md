@@ -154,7 +154,7 @@ Next.js, React + Vite, and Node.js project setup with pnpm and TypeScript best p
 | ------------------------------ | --------------------------------------------- | -------------------------------------------- |
 | **comprehensive-review**       | Multi-perspective code analysis               | `/plugin install comprehensive-review`       |
 | **performance-testing-review** | Performance analysis and test coverage review | `/plugin install performance-testing-review` |
-| **plugin-eval**                | Three-layer quality evaluation framework for Claude Code plugins | `/plugin install plugin-eval`                |
+| **plugin-eval**                | Static lint for Claude Code plugins and skills, with experimental LLM scoring for skills | `/plugin install plugin-eval`                |
 | **skill-forge-essentials**    | Behavioral skills for AI code debt detection and session compaction survival | `/plugin install skill-forge-essentials`    |
 
 ### 🛠️ Utilities (5 plugins)
@@ -419,7 +419,7 @@ Selectors, install paths, and gotchas: [harnesses.md](./harnesses.md#skills-only
 
 ## See Also
 
-- [Agent Skills](./agent-skills.md) - 183 specialized skills across plugins
+- [Agent Skills](./agent-skills.md) - 184 specialized skills across plugins
 - [Agent Reference](./agents.md) - Complete agent catalog
 - [Usage Guide](./usage.md) - Commands and workflows
 - [Architecture](./architecture.md) - Design principles

@@ -2,29 +2,31 @@
  * The `$.telemetry` noun as every caller sees it: the one contract for the
  * noun, its types exported here and the noun declared on `EngineInterface`.
  *
- * The telemetry mod adds the noun in the `engine.create` fold and checks its
- * return against `EngineInterface['telemetry']`; its hooks import these types
- * from this folder, a mod that calls the noun and a test that answers it read
- * them by including it in their tsconfig, and the engine's repository imports
- * the folder by path. Nothing here is imported, so it stands on its own.
+ * The telemetry mod hooks the noun's two events, `telemetry.log` and
+ * `telemetry.mark`, and is what queues and sends a row; on an engine that
+ * has no `telemetry` of its own it also adds the noun in the `engine.create`
+ * fold, checked against `EngineInterface['telemetry']`. Its hooks import
+ * these types from this folder, a mod that calls the noun and a test that
+ * answers it read them by including it in their tsconfig. Nothing here is
+ * imported, so it stands on its own.
  */
 
 /**
- * A plugin's analytics, sent one event at a time through `$.telemetry`.
+ * A plugin's analytics, queued through `$.telemetry` and sent in batches.
  *
- * Internal builds alone: the telemetry mod adds the noun in the
- * `engine.create` fold, so a plugin on an external build, or one where the
- * mod is off, finds no `$.telemetry` and its call throws.
+ * The telemetry mod serves the plugins built into the CLI alone: a call from
+ * an installed plugin rejects. Where the mod is off or absent nothing is
+ * queued, and on an engine without the noun there is no `$.telemetry`.
  */
 export type Telemetry = {
   /**
-   * Sends one event, `tengu_plugin_<event>`, as one first-party row;
-   * resolves once the ingest accepted it.
+   * Queues one event, `tengu_plugin_<event>`, as one first-party row, sent
+   * with the next batch; resolves once queued, rejects a malformed entry.
    *
    * The calling mod names itself in `event`; one already named `tengu_…` is
    * sent as named. A value is a finite number, a boolean or a
    * TelemetryChoice; free text is refused. One input, as every op on `$`
-   * takes.
+   * takes. Whether a batch went out is a line in the debug log.
    *
    * @param entry the event's name, a snake_case token, and its properties by
    *   snake_case key
@@ -41,7 +43,8 @@ export type Telemetry = {
 
   /**
    * Marks one use of a feature as the CLI's own feature events do, one
-   * `tengu_feature_<kind>` row; resolves once the ingest accepted it.
+   * `tengu_feature_<kind>` row queued for the next batch; resolves once
+   * queued, rejects a malformed entry.
    *
    * The row carries `feature_name`, `error_code` on sad or bad (`reason`,
    * required there and refused on ok) and the entry's `props`, checked as
@@ -61,10 +64,22 @@ export type Telemetry = {
 }
 
 /**
+ * Where a logged record goes: `anthropic`, the first-party analytics this
+ * mod sends, or `collector`, the telemetry collector a session's operator
+ * configured, which this mod leaves to whatever is beneath it.
+ */
+export type TelemetryDestination = 'anthropic' | 'collector'
+
+/**
  * What `$.telemetry.log` takes: the event's name after the prefix, and its
  * properties by snake_case key.
+ *
+ * `to` names the destination and is never part of the row; left out, it
+ * reads as `anthropic`. An entry for `collector` is not this mod's: its
+ * hook passes it on beneath untouched.
  */
 export type TelemetryLogEntry = {
+  to?: TelemetryDestination
   event: string
   props?: Readonly<Record<string, TelemetryProp>>
 }
@@ -108,8 +123,8 @@ export type TelemetryChoice = { value: string; of: readonly string[] }
 declare module 'claude-code' {
   interface EngineInterface {
     /**
-     * A plugin's analytics, one first-party row per call; present only where
-     * the telemetry mod is seated (internal builds), absent everywhere else.
+     * A built-in plugin's analytics, first-party rows sent in batches;
+     * present where the telemetry mod is seated, refused to installed plugins.
      */
     telemetry: Telemetry
   }

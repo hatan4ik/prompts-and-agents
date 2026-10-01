@@ -87,3 +87,10 @@ the applied cookbooks, plus the planted-trap fixtures the guided
 tutorials read from — lives under `example_data/`. See
 [`example_data/OVERVIEW.md`](example_data/OVERVIEW.md) for the
 directory map.
+
+## Runnable apps
+
+This directory holds notebooks. Full apps built on Managed Agents, such as
+the Slack and Linear bots, the Sentry triage agent, the road trip planner,
+and the MCP server that used to live here, are in
+[claude-quickstarts/managed-agents](https://github.com/anthropics/claude-quickstarts/tree/main/managed-agents).
