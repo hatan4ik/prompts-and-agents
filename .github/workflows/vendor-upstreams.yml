@@ -24,15 +24,15 @@ jobs:
           rm -rf upstreams
           mkdir -p upstreams
           declare -a SOURCES=(
-            "anthropic-cookbook|anthropics/anthropic-cookbook|a97b9a2dc300635f0c26b5e05d0b54bbe0279ee5"
-            "claude-code|anthropics/claude-code|b5932767f3acbd07da25367064827e5cb81f43de"
-            "anthropic-skills|anthropics/skills|34040c9c568585f6929bedeaad110ad08f079624"
-            "wshobson-agents|wshobson/agents|a30778f8c4e6b0a87567941b7cca4f534bf642b6"
+            "anthropic-cookbook|anthropics/claude-cookbooks|d7265d6ae994ccd8429db0594b000073b2f9ad43"
+            "claude-code|anthropics/claude-code|525d3b35312636cf8c001ecb3df2be0324a48b43"
+            "anthropic-skills|anthropics/skills|8a1541c4a3ffa5a20a5a91de0dcf3f0bab1d1ef4"
+            "wshobson-agents|wshobson/agents|156b7a5e7a8b93642628a339ee4039c925b34c7f"
             "system-prompts-and-models|x1xhlol/system-prompts-and-models-of-ai-tools|1e4203a7d88873c1b37ab2d1c07074fea498c274"
             "awesome-ai-agents|e2b-dev/awesome-ai-agents|9596ab1e69fbbb6c95291141c8dab5c181083216"
-            "openai-agents-python|openai/openai-agents-python|fbd2dbcaaf74a2c447c6d3fa9d5645d83fd7e292"
-            "langgraph|langchain-ai/langgraph|e539ac122f4126f6dd850581c1494948cf620e31"
-            "crewai|crewAIInc/crewAI|894898f84c4ac0a89f24bf7bee6c381eb0e67f51"
+            "openai-agents-python|openai/openai-agents-python|28e9f4fca26dd1c7e679398b87182868ecfad714"
+            "langgraph|langchain-ai/langgraph|4be610c6bc7c042038f671d6def9f523ca385a69"
+            "crewai|crewAIInc/crewAI|ca1d55abb368cd24344de1ddad97bc493b21ffa0"
           )
           for source in "${SOURCES[@]}"; do
             IFS="|" read -r directory upstream commit <<< "$source"
